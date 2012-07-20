@@ -28,15 +28,17 @@ headers = {
 ###############
 def use_httplib(conn, url, headers):
     try:
+        ''' ## error test
         a = random.randint(1, 3)
         if a < 3:
             raise Exception('random number'+str(a))
+        '''
         conn.request(method='GET', url=url, headers=headers)
         #print '**ready'
         status, body = use_httplib_resp(conn)
         return status, body
     except Exception as e:
-        print 'exception', e
+        print '####exception', e
         return -1, e
 
 def use_httplib_redirect(host, url, headers):
@@ -188,26 +190,22 @@ def use_lxml_review_list(body, aid):
     paths = '//span[text()="Price:"]'
     rs = html.xpath(paths)
     for r in rs:
-        print "================="
+        print "=="
         # product
         price = r.getparent().xpath('text()')[0].strip()
-        print price
         products = r.xpath('../../../../../tr')
         product = products[0][0][0][0]
         product_name = product.text
         product_link = product.get('href')
         product_link = product_link.split('/ref')[0]
-        print product_link
         if len(products) == 4:
             offered = products[1][0][0]
             offered_by = tostring(offered)
-            print offered_by
         else:
             offered_by = ''
         # review 
         review = products[0].xpath('../../..')[0].getnext()
         review_id = review.xpath('./td/a')[0].get('name')
-        print review_id
         review_helpful = review.xpath('./td/div/div[contains(text(), "people found the following review helpful")]')
         if len(review_helpful) > 0:
             review_help = review_helpful[0].text.strip().split('people')[0].split('of')
@@ -217,45 +215,36 @@ def use_lxml_review_list(body, aid):
         else:
             review_help_x = 0
             review_help_y = 0
-        print review_help_x, review_help_y
         # review meta
         first = review.xpath('./td/div/div/span/img[contains(@src, "customer-reviews/stars-")]/../..')[0]
         #print tostring(first)
         review_stars = first[0][0].get('alt').split('out')[0].strip()
-        print review_stars
         review_title = first[1].text
-        print review_title
         review_time = first.xpath('text()')[2].strip(', ')
-        print review_time
         comments = review.xpath('./td/div/div[last()]/a')[1].text.replace('Comment', '').strip()
         if comments == '' or comments == None:
             comments = 0
         else:
             comments = comments.strip('( ) ')
-        print comments
         premalink = review.xpath('./td/div/div[last()]/a')[2]
         permalink = review.xpath('./td/div/div[last()]/a')[2].text.replace('Permalink', '').strip()
         if permalink == '' or permalink == None:
             permalink = 0
         else:
             permalink = permalink.strip('( ) ')
-        print permalink
         # review text
         review_content = review.xpath('./td/div/text()')
         review_content = ''.join(review_content)
         review_content = review_content.strip('\n ')
         db_general_execute(sql_review_insert, (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, review_content, price, product_name, product_link, offered_by))
-        #print review_content
         
 
 ############### for spped, i may use multiple thread
-#for i in range(1, 1000):
 def reviewers_rank_read(page_id):
     print '** rank', page_id, "**"
     url = '/review/top-reviewers/ref=cm_cr_tr_link_%s?ie=UTF8&page=%s'%(page_id, page_id)
     status, body = use_httplib(conn, url, headers)
     if status == -1:
-        #db_general_execute(sql_error_rank_insert, (page_id, body))
         return 
     use_lxml_reviewer_rank(body)
     db_general_execute(sql_rank_read_status_update, (page_id, ))
@@ -266,18 +255,16 @@ def reviewer_profile_read(link):
     aid = link.split('/')[6]
     status, body = use_httplib(conn, url, headers)
     if status == -1:
-        #db_general_execute(sql_error_profile_insert, (aid, link, body))
         return
     use_lxml_reviewer_profile(body, aid)
     db_general_execute(sql_profile_read_status_update, (aid, ))
 
 
 def review_lists_read(aid, page_id):
-    print "############## review list", aid, page_id, "#####################"
-    url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%d&sort_by=MostRecentReview'%(aid, page_id)
+    print "** review", aid, page_id, "##"
+    url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%s&sort_by=MostRecentReview'%(aid, page_id)
     status, body = use_httplib(conn, url, headers) 
     if status == -1:
-        #db_general_execute(sql_error_review_insert, (aid, page_id, error_msg))
         return 
     use_lxml_review_list(body, aid)
     db_general_execute(sql_review_read_status_update, (aid, page_id))
@@ -373,28 +360,6 @@ CREATE TABLE IF NOT EXISTS review_read_status (
   read_status TEXT DEFAULT 0, -- 0 means not read yet
   UNIQUE (aid, page_id)
 );
--- error handle 
-CREATE TABLE IF NOT EXISTS read_error_rank (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  page_id TEXT NOT NULL UNIQUE, 
-  error_msg TEXT, 
-  create_time TIMESTAMP DEFAULT (DATETIME('now'))
-);
-CREATE TABLE IF NOT EXISTS read_error_profile (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  aid TEXT NOT NULL UNIQUE, 
-  link TEXT,
-  error_msg TEXT, 
-  create_time TIMESTAMP DEFAULT (DATETIME('now'))
-);
-CREATE TABLE IF NOT EXISTS read_error_review (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  aid TEXT NOT NULL,
-  page_id TEXT NOT NULL, 
-  error_msg TEXT, 
-  create_time TIMESTAMP DEFAULT (DATETIME('now')),
-  UNIQUE (aid, page_id)
-);
 '''
 
 import sqlite3
@@ -485,24 +450,6 @@ sql_profile_read_status_update = '''
 UPDATE profile_read_status SET read_status = 1 WHERE aid = ?
 '''
 
-sql_error_rank_insert = '''
-INSERT OR IGNORE INTO read_error_rank (page_id, error_msg) VALUES (?, ?)
-'''
-sql_error_profile_insert = '''
-INSERT OR IGNORE INTO read_error_profile (aid, link, error_msg) VALUES (?, ?, ?)
-'''
-sql_error_review_insert = '''
-INSERT OR IGNORE INTO read_error_review (aid, page_id, error_msg) VALUES (?, ?, ?)
-'''
-sql_error_rank_update = '''
-DELETE FROM read_error_rank WHERE page_id = ?
-'''
-sql_error_profile_update = '''
-DELETE FROM read_error_profile WHERE aid = ?
-'''
-sql_error_review_update = '''
-DELETE FROM read_error_review WHERE aid = ?
-'''
 
 ################
 #print tree
@@ -515,7 +462,7 @@ def read_rank():
     flag = 0
     for r in c.fetchall():
         page_id = r[0]
-        reviewers_rank_read(page_id)
+        reviewers_rank_read(str(page_id))
         flag = flag + 1
     c.close()
     if flag == 0:
@@ -531,8 +478,7 @@ def read_profile():
         aid = r[0]
         link = r[1]
         rank = r[2]
-        print "*** rank", rank, link
-        reviewer_profile_read(link)
+        reviewer_profile_read(str(link))
         flag = flag + 1
     c.close()
     if flag == 0:
@@ -548,7 +494,7 @@ def read_review(): # consider to use multiple thread
         aid = r[0]
         page_id = r[1]
         rank = r[2]
-        review_lists_read(aid, page_id)
+        review_lists_read(str(aid), str(page_id))
         flag = flag + 1
     c.close()
     if flag == 0:
@@ -576,7 +522,6 @@ def read_main():
         print "profile: ", rank
     read_profile()
     #review prepare:
-    '''
     c.execute('SELECT aid, link, total_reviews, rank FROM reviewer', ()) # create reading list table
     for r in c.fetchall():
         aid = r[0]
@@ -590,9 +535,8 @@ def read_main():
             page_id = l
             c.execute(sql_review_read_status_insert, (aid, rank, page_id))
             conn_db.commit()
-        print rank
-    '''
-    #read_review()
+        print "review: ", rank, aid
+    read_review()
 
 def table_clean():
     c = conn_db.cursor()
