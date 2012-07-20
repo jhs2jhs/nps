@@ -5,6 +5,7 @@ from lxml import etree
 from lxml.etree import tostring
 import lxml.html
 from lxml.html.clean import clean_html, Cleaner
+import random
 
 host = 'www.amazon.com'
 url = '/review/top-reviewers/'
@@ -27,6 +28,9 @@ headers = {
 ###############
 def use_httplib(conn, url, headers):
     try:
+        a = random.randint(1, 3)
+        if a < 3:
+            raise Exception('random number'+str(a))
         conn.request(method='GET', url=url, headers=headers)
         #print '**ready'
         status, body = use_httplib_resp(conn)
@@ -91,7 +95,6 @@ def use_lxml_reviewer_rank(body):
         helpful_votes = crnum[2].text.strip()
         percent_helpful = r.findall('.//td[@class="crNumPercentHelpful"]')[0].text.strip()
         fan_voters = r.findall('.//td[@class="crNumFanVoters"]')[0].text.strip()
-        #print name, aid, link, rank, total_reviews, helpful_votes, percent_helpful, fan_voters
         db_general_execute(sql_reviewer_insert, (name, aid, link, rank, total_reviews, helpful_votes, percent_helpful, fan_voters))
         
 
@@ -138,29 +141,23 @@ def use_lxml_reviewer_profile(body, aid):
             if bt == "E-mail:":
                 email = b.getnext()[0].text
                 db_general_execute(sql_reviewer_email_update, (email, aid))
-                print bt, email
             elif bt == 'Anniversary:':
                 anniversary = b.getnext().text
                 db_general_execute(sql_reviewer_anniversary_update, (anniversary, aid))
-                print bt, anniversary
             elif bt == 'Birthday:':
                 birthday = b.getnext().text
                 db_general_execute(sql_reviewer_birthday_update, (birthday, aid))
-                print bt, birthday
             elif bt == 'Web Page:':
                 webpage = b.getnext()[0].text
                 db_general_execute(sql_reviewer_webpage_update, (webpage, aid))
-                print bt, webpage
             elif bt == 'Location:':
                 location = b.getparent()[0]
                 location = tostring(location)
                 location = location.replace('<b>Location:</b>', '').strip()
                 db_general_execute(sql_reviewer_location_update, (location, aid))
-                print bt, location
             elif bt == 'In My Own Words:':
                 own_words = b.getparent().getnext().text
                 db_general_execute(sql_reviewer_my_own_words_update, (own_words, aid))
-                #print bt, own_words
             else:
                 print "wrong bt:", bt
                 break
@@ -177,24 +174,13 @@ def use_lxml_reviewer_profile(body, aid):
                     interests = r.getnext().text
                     for interest in interests:
                         db_general_execute(sql_reviewer_interest_insert, (aid, interest))
-                    #print bt, interests
                 if bt == "Frequently Used Tags":
                     tags = r.getnext()
                     for t in tags:
                         tag = t.text
                         tag_c = t.get('title').replace('tagged items', '').strip()
                         db_general_execute(sql_reviewer_tag_insert, (aid, tag, tag_c))
-                        #print tag, tag_c
         db_general_execute(sql_reviewer_profile_finish_update, (aid, )) 
-        # review_all link: may delete as not be used
-        '''
-        paths = '//div[@class="seeAll xsmall"]'
-        rs = html.xpath(paths)
-        if len(rs):
-            rs = rs[0]
-            ra_link = rs[0].get('href')
-            print ra_link # calculate how many pages of review based on total number divided by 10, then check each pages. 
-        '''
             
     
 def use_lxml_review_list(body, aid):
@@ -264,19 +250,19 @@ def use_lxml_review_list(body, aid):
 
 ############### for spped, i may use multiple thread
 #for i in range(1, 1000):
-def reviewers_rank_read(i):
-    print '********* reviewer rank', i, "***************"
-    url = '/review/top-reviewers/ref=cm_cr_tr_link_%d?ie=UTF8&page=%d'%(i, i)
+def reviewers_rank_read(page_id):
+    print '** rank', page_id, "**"
+    url = '/review/top-reviewers/ref=cm_cr_tr_link_%s?ie=UTF8&page=%s'%(page_id, page_id)
     status, body = use_httplib(conn, url, headers)
     if status == -1:
         #db_general_execute(sql_error_rank_insert, (page_id, body))
         return 
     use_lxml_reviewer_rank(body)
-    db_general_execute(sql_rank_read_status_update, (i, ))
+    db_general_execute(sql_rank_read_status_update, (page_id, ))
 
 def reviewer_profile_read(link):
     url = link.replace('http://www.amazon.com', '').strip()
-    print url, "************"
+    print "** profile", url, "**"
     aid = link.split('/')[6]
     status, body = use_httplib(conn, url, headers)
     if status == -1:
@@ -287,7 +273,7 @@ def reviewer_profile_read(link):
 
 
 def review_lists_read(aid, page_id):
-    print "############## review list", aid, page_id "#####################"
+    print "############## review list", aid, page_id, "#####################"
     url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%d&sort_by=MostRecentReview'%(aid, page_id)
     status, body = use_httplib(conn, url, headers) 
     if status == -1:
@@ -484,7 +470,7 @@ sql_rank_read_status_insert = '''
 INSERT OR IGNORE INTO rank_read_status (page_id) VALUES (?)
 '''
 sql_profile_read_status_insert = '''
-INSERT OR IGNORE INTO profile_read_status (aid, link, rank) VALUES (?, ?)
+INSERT OR IGNORE INTO profile_read_status (aid, link, rank) VALUES (?, ?, ?)
 '''
 sql_review_read_status_insert = '''
 INSERT OR IGNORE INTO review_read_status (aid, rank, page_id) VALUES (?, ?, ?)
@@ -532,7 +518,7 @@ def read_rank():
         reviewers_rank_read(page_id)
         flag = flag + 1
     c.close()
-    if flag = 0:
+    if flag == 0:
         return 
     else:
         read_rank()
@@ -549,7 +535,7 @@ def read_profile():
         reviewer_profile_read(link)
         flag = flag + 1
     c.close()
-    if flag = 0:
+    if flag == 0:
         return 
     else:
         read_profile()
@@ -565,7 +551,7 @@ def read_review(): # consider to use multiple thread
         review_lists_read(aid, page_id)
         flag = flag + 1
     c.close()
-    if flag = 0:
+    if flag == 0:
         return 
     else:
         read_review()
@@ -573,10 +559,11 @@ def read_review(): # consider to use multiple thread
 def read_main():
     c = conn_db.cursor()
     # rank 
-    ls = range(1, 1001)
+    ls = range(1, 3)
     for l in ls:
-        c.execute(sql_rank_read_insert, (l, ))
+        c.execute(sql_rank_read_status_insert, (l, ))
         conn_db.commit()
+        print "rank: ", l
     read_rank()
     # profile prepare
     c.execute('SELECT aid, link, rank FROM reviewer', ()) # create reading list table
@@ -584,10 +571,12 @@ def read_main():
         aid = r[0]
         link = r[1]
         rank = r[2]
-        c.execute(sql_profile_read_insert, (aid, link, rank))
+        c.execute(sql_profile_read_status_insert, (aid, link, rank))
         conn_db.commit()
+        print "profile: ", rank
     read_profile()
     #review prepare:
+    '''
     c.execute('SELECT aid, link, total_reviews, rank FROM reviewer', ()) # create reading list table
     for r in c.fetchall():
         aid = r[0]
@@ -602,16 +591,18 @@ def read_main():
             c.execute(sql_review_read_status_insert, (aid, rank, page_id))
             conn_db.commit()
         print rank
-    read_review()
+    '''
+    #read_review()
 
-def tabble_clean():
-    c = conn_db_cursor()
+def table_clean():
+    c = conn_db.cursor()
     c.execute('DROP TABLE IF EXISTS rank_read_status', ())
     c.execute('DROP TABLE IF EXISTS profile_read_status', ())
     c.execute('DROP TABLE IF EXISTS review_read_status', ())
     conn_db.commit()
     c.close()
 
+#table_clean()
 read_main()
 
 #### need to check the db table, some column are not used in reviewer
