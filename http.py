@@ -269,9 +269,10 @@ def reviewers_rank_read(i):
     url = '/review/top-reviewers/ref=cm_cr_tr_link_%d?ie=UTF8&page=%d'%(i, i)
     status, body = use_httplib(conn, url, headers)
     if status == -1:
-        db_general_execute(sql_error_rank_insert, (page_id, body))
+        #db_general_execute(sql_error_rank_insert, (page_id, body))
         return 
     use_lxml_reviewer_rank(body)
+    db_general_execute(sql_rank_read_status_update, (i, ))
 
 def reviewer_profile_read(link):
     url = link.replace('http://www.amazon.com', '').strip()
@@ -279,9 +280,10 @@ def reviewer_profile_read(link):
     aid = link.split('/')[6]
     status, body = use_httplib(conn, url, headers)
     if status == -1:
-        db_general_execute(sql_error_profile_insert, (aid, link, body))
+        #db_general_execute(sql_error_profile_insert, (aid, link, body))
         return
     use_lxml_reviewer_profile(body, aid)
+    db_general_execute(sql_profile_read_status_update, (aid, ))
 
 
 def review_lists_read(aid, page_id):
@@ -289,7 +291,8 @@ def review_lists_read(aid, page_id):
     url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%d&sort_by=MostRecentReview'%(aid, page_id)
     status, body = use_httplib(conn, url, headers) 
     if status == -1:
-        db_general_execute(sql_error_review_insert, (aid, page_id, error_msg))
+        #db_general_execute(sql_error_review_insert, (aid, page_id, error_msg))
+        return 
     use_lxml_review_list(body, aid)
     db_general_execute(sql_review_read_status_update, (aid, page_id))
     
@@ -372,6 +375,7 @@ CREATE TABLE IF NOT EXISTS rank_read_status (
 CREATE TABLE IF NOT EXISTS profile_read_status (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   aid TEXT NOT NULL UNIQUE, 
+  link TEXT NOT NULL,
   rank TEXT NOT NULL, 
   read_status TEXT DEFAULT 0
 );
@@ -424,6 +428,7 @@ def db_general_execute (sql, params):
     c.execute(sql, params)
     conn_db.commit()
     c.close()
+
 
 sql_reviewer_insert = '''
 INSERT OR IGNORE INTO reviewer (name, aid, link, rank, total_reviews, helpful_votes, percent_helpful, fan_voters) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -479,7 +484,7 @@ sql_rank_read_status_insert = '''
 INSERT OR IGNORE INTO rank_read_status (page_id) VALUES (?)
 '''
 sql_profile_read_status_insert = '''
-INSERT OR IGNORE INTO profile_read_status (aid, rank) VALUES (?, ?)
+INSERT OR IGNORE INTO profile_read_status (aid, link, rank) VALUES (?, ?)
 '''
 sql_review_read_status_insert = '''
 INSERT OR IGNORE INTO review_read_status (aid, rank, page_id) VALUES (?, ?, ?)
@@ -518,60 +523,71 @@ DELETE FROM read_error_review WHERE aid = ?
 db_init()
 
 
-def read_main_rank():
-    ## rank
-    ls = range(1, 1001) #max is 1000
-    for l in ls:
-        reviewers_rank_read(l)
-    ''' # it is too trouble to get the list of all people as rank may changed
-    for l in ls:
-        lss[l] = 0
-    c.execute('SELECT rank from reviewer', ())
-    for r in c.fetchall():
-        rank = r[0].replace(',', '').strip()
-        rank = (int(rank) - 1) / 10 + 1
-        if ls.has_key(rank):
-            lss[rank] = ls[rank]+1
-    ls = []
-    for l in lss:
-        if l != 10:
-            print
-    '''
-    '''### for error handing
+def read_rank():
     c = conn_db.cursor()
-    c.execute('SELECT page_id, error_msg FROM read_error_rank', ())
+    c.execute('SELECT page_id FROM rank_read_status WHERE read_status = 0', ())
     flag = 0
     for r in c.fetchall():
         page_id = r[0]
-        msg = r[1]
-        db_execute_general(sql_error_rank_update, (page_id, ))
-        print "** error rank: ", page_id, msg
-        reviews_rank_read(page_id)
+        reviewers_rank_read(page_id)
         flag = flag + 1
     c.close()
-    if flag == 0:
-        return
+    if flag = 0:
+        return 
     else:
-        return read_main_rank()
-    '''
+        read_rank()
 
-def read_main_profile():
+def read_profile():
     c = conn_db.cursor()
-    c.execute('SELECT aid, link, total_reviews, rank FROM reviewer WHERE helpful_x = 0 AND helpful_y = 0', ()) # change it to determine based on profile_page_status 
+    c.execute('SELECT aid, link, rank FROM profile_read_status WHERE read_status = 0', ()) 
+    flag = 0
     for r in c.fetchall():
         aid = r[0]
         link = r[1]
-        rank = r[3]
+        rank = r[2]
         print "*** rank", rank, link
         reviewer_profile_read(link)
+        flag = flag + 1
     c.close()
+    if flag = 0:
+        return 
+    else:
+        read_profile()
 
-def read_main_review():
+def read_review(): # consider to use multiple thread
     c = conn_db.cursor()
-    # review read prepare
-    '''
-    #c.execute('DROP TABLE IF EXISTS review_read_status', ())
-    #conn_db.commit()
+    c.execute('SELECT aid, page_id, rank FROM review_read_status WHERE read_status = 0', ())
+    flag = 0
+    for r in c.fetchall():
+        aid = r[0]
+        page_id = r[1]
+        rank = r[2]
+        review_lists_read(aid, page_id)
+        flag = flag + 1
+    c.close()
+    if flag = 0:
+        return 
+    else:
+        read_review()
+
+def read_main():
+    c = conn_db.cursor()
+    # rank 
+    ls = range(1, 1001)
+    for l in ls:
+        c.execute(sql_rank_read_insert, (l, ))
+        conn_db.commit()
+    read_rank()
+    # profile prepare
+    c.execute('SELECT aid, link, rank FROM reviewer', ()) # create reading list table
+    for r in c.fetchall():
+        aid = r[0]
+        link = r[1]
+        rank = r[2]
+        c.execute(sql_profile_read_insert, (aid, link, rank))
+        conn_db.commit()
+    read_profile()
+    #review prepare:
     c.execute('SELECT aid, link, total_reviews, rank FROM reviewer', ()) # create reading list table
     for r in c.fetchall():
         aid = r[0]
@@ -583,20 +599,22 @@ def read_main_review():
         ls = range(1, last+1)
         for l in ls:
             page_id = l
-            db_general_execute(sql_review_read_status_insert, (aid, rank, page_id))
+            c.execute(sql_review_read_status_insert, (aid, rank, page_id))
+            conn_db.commit()
         print rank
-    '''
-    for r in c.fetchall():
-    #    aid = r[0]
-    #    total_reviews = r[2]
-    #    review_lists_read(total_reviews, aid)
+    read_review()
+
+def tabble_clean():
+    c = conn_db_cursor()
+    c.execute('DROP TABLE IF EXISTS rank_read_status', ())
+    c.execute('DROP TABLE IF EXISTS profile_read_status', ())
+    c.execute('DROP TABLE IF EXISTS review_read_status', ())
+    conn_db.commit()
     c.close()
 
-def read_main():
-    read_main_rank()
-    
-
 read_main()
+
+#### need to check the db table, some column are not used in reviewer
 
 #print body_resp
 conn.close()
