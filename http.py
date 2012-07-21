@@ -17,7 +17,7 @@ port = 80
 strict = 1
 timeout = 10
 source_address = None # not used at moment
-conn = httplib.HTTPConnection(host=host, port=port, strict=strict, timeout=timeout, source_address=source_address)     # how to sort the proxy? http://www.velocityreviews.com/forums/t325113-httplib-and-proxy.html 
+#conn = httplib.HTTPConnection(host=host, port=port, strict=strict, timeout=timeout, source_address=source_address)     # how to sort the proxy? http://www.velocityreviews.com/forums/t325113-httplib-and-proxy.html 
 headers = {
     #"Host":"www.amazon.com", 
     "Connection":"keep-alive",
@@ -28,21 +28,20 @@ headers = {
     "Accept-Charset": "ISO-8859-1,utf-8;q=0.7,*;q=0.3",
     }
 
-
 def get_conn_http():
     conn = httplib.HTTPConnection(host=host, port=port, strict=strict, timeout=timeout, source_address=source_address)
     return conn
 
+conn = get_conn_http()
+
+
 ###############
-def use_httplib(conn, url, headers):
+def use_httplib(url, headers):
+    global conn
     try:
-        ''' ## error test
-        a = random.randint(1, 3)
-        if a < 3:
-            raise Exception('random number'+str(a))
-        '''
-        #conn.close()
-        #raise Exception('cool')
+        if conn == None:
+            print conn, type(conn)
+            conn = get_conn_http()
         conn.request(method='GET', url=url, headers=headers)
         #print '**ready'
         status, body = use_httplib_resp(conn)
@@ -56,10 +55,10 @@ def use_httplib(conn, url, headers):
 def use_httplib_redirect(host, url, headers):
     print host, url, "======= redirect ========"
     try:
-        conn = httplib.HTTPConnection(host=host, port=80)
-        conn.request(method="GET", url=url, headers=headers)
+        conn_c = httplib.HTTPConnection(host=host, port=80)
+        conn_c.request(method="GET", url=url, headers=headers)
         status, body = use_httplib_resp(conn)
-        conn.close()
+        conn_c.close()
         return status, body
     except Exception as e:
         print 'exception', e
@@ -261,29 +260,29 @@ def use_lxml_review_list(body, aid):
         
 
 ############### for spped, i may use multiple thread
-def reviewers_rank_read(conn, page_id):
+def reviewers_rank_read(page_id):
     print '** rank', page_id, "**"
     url = '/review/top-reviewers/ref=cm_cr_tr_link_%s?ie=UTF8&page=%s'%(page_id, page_id)
-    status, body = use_httplib(conn, url, headers)
+    status, body = use_httplib(url, headers)
     if status == 200:
         use_lxml_reviewer_rank(body)
         db_general_execute(sql_rank_read_status_update, (page_id, ))
 
-def reviewer_profile_read(conn, link, rank):
+def reviewer_profile_read(link, rank):
     url = link.replace('http://www.amazon.com', '').strip()
     print "** profile", url, rank, "**"
     aid = link.split('/')[6]
-    status, body = use_httplib(conn, url, headers)
+    status, body = use_httplib(url, headers)
     if status == 200:
         use_lxml_reviewer_profile(body, aid)
         db_general_execute(sql_profile_read_status_update, (aid, ))
     print status
 
 
-def review_lists_read(conn, aid, page_id, rank):
+def review_lists_read(aid, page_id, rank):
     print "** review", aid, page_id, rank, "**"
     url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%s&sort_by=MostRecentReview'%(aid, page_id)
-    status, body = use_httplib(conn, url, headers) 
+    status, body = use_httplib(url, headers) 
     if status == 200:
         use_lxml_review_list(body, aid)
         db_general_execute(sql_review_read_status_update, (aid, page_id))
@@ -471,7 +470,7 @@ UPDATE profile_read_status SET read_status = 1 WHERE aid = ?
 db_init()
 
 
-def read_rank(conn):
+def read_rank():
     c = conn_db.cursor()
     c.execute('SELECT page_id FROM rank_read_status WHERE read_status = 0', ())
     flag = 0
@@ -479,17 +478,14 @@ def read_rank(conn):
     while r != None:
     #for r in c.fetchall():
         page_id = r[0]
-        if conn == None:
-            reviewers_rank_read(conn, str(page_id))
+        reviewers_rank_read(str(page_id))
         flag = flag + 1
         r = c.fetchone()
     c.close()
-    if flag == 0:
-        return 
-    else:
-        return read_rank(conn)
+    if flag > 0:
+        read_rank()
 
-def read_profile(conn):
+def read_profile():
     c = conn_db.cursor()
     c.execute('SELECT aid, link, rank FROM profile_read_status WHERE read_status = 0', ()) 
     flag = 0
@@ -499,20 +495,15 @@ def read_profile(conn):
         aid = r[0]
         link = r[1]
         rank = r[2]
-        print conn, type(conn)
-        if conn == None:
-            conn = get_conn_http()
-        reviewer_profile_read(conn, str(link), str(rank))
+        reviewer_profile_read(str(link), str(rank))
         flag = flag + 1
         r = c.fetchone()
     c.close()
     print "&&&&&&&&&&&& flag:", flag
-    if flag == 0:
-        return 
-    else:
-        return read_profile(conn)
+    if flag > 0:
+        read_profile()
 
-def read_review(conn): # consider to use multiple thread
+def read_review(): # consider to use multiple thread
     c = conn_db.cursor()
     c.execute('SELECT aid, page_id, rank FROM review_read_status WHERE read_status = 0', ())
     flag = 0
@@ -522,16 +513,12 @@ def read_review(conn): # consider to use multiple thread
         aid = r[0]
         page_id = r[1]
         rank = r[2]
-        if conn == None:
-            conn = get_conn_http()
-        review_lists_read(conn, str(aid), str(page_id), str(rank))
+        review_lists_read(str(aid), str(page_id), str(rank))
         flag = flag + 1
         r = c.fetchone()
     c.close()
-    if flag == 0:
-        return 
-    else:
-        return read_review(conn)
+    if flag > 0:
+        read_review()
 
 qi = Queue()
 qo = Queue(5)
@@ -641,7 +628,7 @@ def read_main():
         cc.execute(sql_rank_read_status_insert, (l, ))
         conn_db.commit()
         print "rank: ", l
-    read_rank(conn)
+    read_rank()
     '''
     # profile prepare
     '''
@@ -654,8 +641,9 @@ def read_main():
         conn_db.commit()
         print "profile: ", rank
     '''
-    read_profile(conn)
+    read_profile()
     #review prepare:
+    '''
     c.execute('SELECT aid, link, total_reviews, rank FROM reviewer', ()) # create reading list table
     r = c.fetchone()
     while r != None:
@@ -673,7 +661,8 @@ def read_main():
             conn_db.commit()
         print "review: ", rank, aid
         r = c.fetchone()
-    read_review(conn)
+    '''
+    read_review()
     c.close()
     cc.close()
 
