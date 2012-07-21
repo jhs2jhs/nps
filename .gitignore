@@ -29,3 +29,5 @@ pip-log.txt
 *.db*
 
 *.DS_Store
+
+test*

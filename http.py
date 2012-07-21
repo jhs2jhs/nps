@@ -6,6 +6,10 @@ from lxml.etree import tostring
 import lxml.html
 from lxml.html.clean import clean_html, Cleaner
 import random
+from Queue import Queue
+from threading import Thread, Lock, stack_size
+import threading
+import time
 
 host = 'www.amazon.com'
 url = '/review/top-reviewers/'
@@ -25,6 +29,10 @@ headers = {
     }
 
 
+def get_conn_http():
+    conn = httplib.HTTPConnection(host=host, port=port, strict=strict, timeout=timeout, source_address=source_address)
+    return conn
+
 ###############
 def use_httplib(conn, url, headers):
     try:
@@ -33,12 +41,16 @@ def use_httplib(conn, url, headers):
         if a < 3:
             raise Exception('random number'+str(a))
         '''
+        #conn.close()
+        #raise Exception('cool')
         conn.request(method='GET', url=url, headers=headers)
         #print '**ready'
         status, body = use_httplib_resp(conn)
         return status, body
     except Exception as e:
-        print '####exception', e
+        print '####exception', e, type(conn), conn
+        conn.close()
+        conn = None
         return -1, e
 
 def use_httplib_redirect(host, url, headers):
@@ -182,22 +194,26 @@ def use_lxml_reviewer_profile(body, aid):
                         tag = t.text
                         tag_c = t.get('title').replace('tagged items', '').strip()
                         db_general_execute(sql_reviewer_tag_insert, (aid, tag, tag_c))
-        db_general_execute(sql_reviewer_profile_finish_update, (aid, )) 
+        #db_general_execute(sql_reviewer_profile_finish_update, (aid, )) 
             
     
 def use_lxml_review_list(body, aid):
+    c = conn_db.cursor()
     html = body_clean(body)
-    paths = '//span[text()="Price:"]'
+    #paths = '//span[text()="Price:"]'
+    paths = '//b[text()="Availability:"]'
     rs = html.xpath(paths)
     for r in rs:
         print "=="
-        # product
-        price = r.getparent().xpath('text()')[0].strip()
-        products = r.xpath('../../../../../tr')
+        products = r.xpath('../../../tr')
         product = products[0][0][0][0]
         product_name = product.text
-        product_link = product.get('href')
-        product_link = product_link.split('/ref')[0]
+        if product_name != None:
+            product_link = product.get('href')
+            product_link = product_link.split('/ref')[0]
+        else:
+            product_link = ''
+            product_name = ''
         if len(products) == 4:
             offered = products[1][0][0]
             offered_by = tostring(offered)
@@ -236,38 +252,41 @@ def use_lxml_review_list(body, aid):
         review_content = review.xpath('./td/div/text()')
         review_content = ''.join(review_content)
         review_content = review_content.strip('\n ')
-        db_general_execute(sql_review_insert, (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, review_content, price, product_name, product_link, offered_by))
+        #print aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, product_name, product_link, offered_by
+        c.execute(sql_review_insert, (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, review_content, product_name, product_link, offered_by))
+        conn_db.commit()
+    c.close()
+    #print results
+    #return results
         
 
 ############### for spped, i may use multiple thread
-def reviewers_rank_read(page_id):
+def reviewers_rank_read(conn, page_id):
     print '** rank', page_id, "**"
     url = '/review/top-reviewers/ref=cm_cr_tr_link_%s?ie=UTF8&page=%s'%(page_id, page_id)
     status, body = use_httplib(conn, url, headers)
-    if status == -1:
-        return 
-    use_lxml_reviewer_rank(body)
-    db_general_execute(sql_rank_read_status_update, (page_id, ))
+    if status == 200:
+        use_lxml_reviewer_rank(body)
+        db_general_execute(sql_rank_read_status_update, (page_id, ))
 
-def reviewer_profile_read(link):
+def reviewer_profile_read(conn, link, rank):
     url = link.replace('http://www.amazon.com', '').strip()
-    print "** profile", url, "**"
+    print "** profile", url, rank, "**"
     aid = link.split('/')[6]
     status, body = use_httplib(conn, url, headers)
-    if status == -1:
-        return
-    use_lxml_reviewer_profile(body, aid)
-    db_general_execute(sql_profile_read_status_update, (aid, ))
+    if status == 200:
+        use_lxml_reviewer_profile(body, aid)
+        db_general_execute(sql_profile_read_status_update, (aid, ))
+    print status
 
 
-def review_lists_read(aid, page_id):
-    print "** review", aid, page_id, "##"
+def review_lists_read(conn, aid, page_id, rank):
+    print "** review", aid, page_id, rank, "**"
     url = '/gp/cdp/member-reviews/%s?ie=UTF8&display=public&page=%s&sort_by=MostRecentReview'%(aid, page_id)
     status, body = use_httplib(conn, url, headers) 
-    if status == -1:
-        return 
-    use_lxml_review_list(body, aid)
-    db_general_execute(sql_review_read_status_update, (aid, page_id))
+    if status == 200:
+        use_lxml_review_list(body, aid)
+        db_general_execute(sql_review_read_status_update, (aid, page_id))
     
 
 
@@ -292,10 +311,7 @@ CREATE TABLE IF NOT EXISTS reviewer (
   birthday TEXT, 
   web_page TEXT, 
   location TEXT, 
-  in_my_own_words TEXT,
-  -- html read status
-  rank_page_status TEXT DEFAULT 1, -- 1 means finish read
-  profile_page_status TEXT DEFAULT 0 
+  in_my_own_words TEXT
 );
 CREATE TABLE IF NOT EXISTS reviewer_badget (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -334,7 +350,6 @@ CREATE TABLE IF NOT EXISTS review (
   review_comment TEXT DEFAULT 0,
   review_premalink TEXT DEFAULT 0,
   review_text TEXT,
-  product_price TEXT,
   product_name TEXT, 
   product_link TEXT,
   offered_by TEXT
@@ -427,7 +442,7 @@ UPDATE reviewer SET profile_page_status = 1 WHERE aid = ?
 '''
 
 sql_review_insert = '''
-INSERT OR IGNORE INTO review (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, review_comment, review_premalink, review_text, product_price, product_name, product_link, offered_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT OR IGNORE INTO review (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, review_comment, review_premalink, review_text, product_name, product_link, offered_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 '''
 
 
@@ -456,74 +471,195 @@ UPDATE profile_read_status SET read_status = 1 WHERE aid = ?
 db_init()
 
 
-def read_rank():
+def read_rank(conn):
     c = conn_db.cursor()
     c.execute('SELECT page_id FROM rank_read_status WHERE read_status = 0', ())
     flag = 0
-    for r in c.fetchall():
+    r = c.fetchone()
+    while r != None:
+    #for r in c.fetchall():
         page_id = r[0]
-        reviewers_rank_read(str(page_id))
+        if conn == None:
+            reviewers_rank_read(conn, str(page_id))
         flag = flag + 1
+        r = c.fetchone()
     c.close()
     if flag == 0:
         return 
     else:
-        read_rank()
+        return read_rank(conn)
 
-def read_profile():
+def read_profile(conn):
     c = conn_db.cursor()
     c.execute('SELECT aid, link, rank FROM profile_read_status WHERE read_status = 0', ()) 
     flag = 0
-    for r in c.fetchall():
+    r = c.fetchone()
+    while r != None:
+    #for r in c.fetchall():
         aid = r[0]
         link = r[1]
         rank = r[2]
-        reviewer_profile_read(str(link))
+        print conn, type(conn)
+        if conn == None:
+            conn = get_conn_http()
+        reviewer_profile_read(conn, str(link), str(rank))
         flag = flag + 1
+        r = c.fetchone()
+    c.close()
+    print "&&&&&&&&&&&& flag:", flag
+    if flag == 0:
+        return 
+    else:
+        return read_profile(conn)
+
+def read_review(conn): # consider to use multiple thread
+    c = conn_db.cursor()
+    c.execute('SELECT aid, page_id, rank FROM review_read_status WHERE read_status = 0', ())
+    flag = 0
+    r = c.fetchone()
+    while r != None:
+    #for r in c.fetchall():
+        aid = r[0]
+        page_id = r[1]
+        rank = r[2]
+        if conn == None:
+            conn = get_conn_http()
+        review_lists_read(conn, str(aid), str(page_id), str(rank))
+        flag = flag + 1
+        r = c.fetchone()
     c.close()
     if flag == 0:
         return 
     else:
-        read_profile()
+        return read_review(conn)
 
-def read_review(): # consider to use multiple thread
+qi = Queue()
+qo = Queue(5)
+def read_review_thread(): # consider to use multiple thread
     c = conn_db.cursor()
     c.execute('SELECT aid, page_id, rank FROM review_read_status WHERE read_status = 0', ())
+    for i in range(5):
+        t = ThreadReview(qi, qo)
+        t.setDaemon(True)
+        t.start()
     flag = 0
     for r in c.fetchall():
         aid = r[0]
         page_id = r[1]
         rank = r[2]
-        review_lists_read(str(aid), str(page_id))
+        #review_lists_read(str(aid), str(page_id))
+        qi.put((str(aid), str(page_id)))
         flag = flag + 1
     c.close()
+    #qi.join()
+    while not qo.empty():
+        results, aid, page_id = qo.get()
+        review_thread_db(results, aid, page_id)
     if flag == 0:
         return 
     else:
         read_review()
 
+def review_thread_db(results, aid, page_id):
+    #results, aid, page_id = rs
+    c = conn_db.cursor()
+    #print aid, page_id
+    for result in results:
+        aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, review_content, price, product_name, product_link, offered_by = result
+        c.execute(sql_review_insert, (aid, review_id, review_help_x, review_help_y, review_stars, review_time, review_title, comments, permalink, review_content, price, product_name, product_link, offered_by))
+        conn_db.commit()
+        print result
+    #c.execute(sql_review_read_status_update, (aid, page_id))
+    #conn_db.commit()
+    c.close()
+
+class ThreadReview(threading.Thread):
+    def __init__(self, qi, qo):
+        threading.Thread.__init__(self)
+        self.conn = httplib.HTTPConnection(host=host, port=port, strict=strict, timeout=timeout, source_address=source_address)
+        self.qi = qi
+        self.qo = qo
+    def run(self):
+        while True:
+            if self.qi.empty(): break
+            aid, page_id = self.qi.get()
+            out = review_lists_read(self.conn, aid, page_id)
+            self.qo.put((out, aid, page_id))
+            self.qi.task_done()
+            time.sleep(0.1)
+
+
+class FetchIO():
+    def __init__(self, threads):
+        self.lock = Lock()
+        self.threads = threads
+        self.qi = Queue()
+        self.qo = Queue(threads)
+        for i in range(threads):
+            t = ThreadReview(target=self.threadget)
+            t.setDaemon(True)
+            t.start()
+        self.running = 0
+    
+    def __del__(self):
+        #time.sleep(0)
+        self.qi.join()
+        self.qo.join()
+    
+    def taskleft(self):
+        return self.qi.qsize()+self.qo.qsize()+self.running
+    
+    def push(self, req):
+        self.qi.put(req)
+    
+    def pop(self):
+        return self.qo.get()
+        
+    def threadget(self):
+        while True:
+            aid, page_id = self.qi.get()
+            with self.lock:
+                self.running += 1
+            print "[[[[[[[[[[", aid, page_id, "]]]]]]]]"
+            out = review_lists_read(self.conn, aid, page_id)
+            #print out
+            print "(((((((((((", len(out), "))))))))))))"
+            self.qo.put((out, aid, page_id), True, None)
+            with self.lock:
+                self.running -= 1
+            self.qi.task_done()
+            #time.sleep(0.1)
+
+
 def read_main():
     c = conn_db.cursor()
+    cc = conn_db.cursor()
     # rank 
-    ls = range(1, 3)
+    '''
+    ls = range(1, 1001)
     for l in ls:
-        c.execute(sql_rank_read_status_insert, (l, ))
+        cc.execute(sql_rank_read_status_insert, (l, ))
         conn_db.commit()
         print "rank: ", l
-    read_rank()
+    read_rank(conn)
+    '''
     # profile prepare
+    '''
     c.execute('SELECT aid, link, rank FROM reviewer', ()) # create reading list table
     for r in c.fetchall():
         aid = r[0]
         link = r[1]
         rank = r[2]
-        c.execute(sql_profile_read_status_insert, (aid, link, rank))
+        cc.execute(sql_profile_read_status_insert, (aid, link, rank))
         conn_db.commit()
         print "profile: ", rank
-    read_profile()
+    '''
+    read_profile(conn)
     #review prepare:
     c.execute('SELECT aid, link, total_reviews, rank FROM reviewer', ()) # create reading list table
-    for r in c.fetchall():
+    r = c.fetchone()
+    while r != None:
+    #for r in c.fetchall():
         aid = r[0]
         total_reviews = r[2]
         rank = r[3]
@@ -533,10 +669,13 @@ def read_main():
         ls = range(1, last+1)
         for l in ls:
             page_id = l
-            c.execute(sql_review_read_status_insert, (aid, rank, page_id))
+            cc.execute(sql_review_read_status_insert, (aid, rank, page_id))
             conn_db.commit()
         print "review: ", rank, aid
-    read_review()
+        r = c.fetchone()
+    read_review(conn)
+    c.close()
+    cc.close()
 
 def table_clean():
     c = conn_db.cursor()
@@ -548,6 +687,7 @@ def table_clean():
 
 #table_clean()
 read_main()
+#read_review()
 
 #### need to check the db table, some column are not used in reviewer
 
