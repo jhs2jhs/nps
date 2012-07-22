@@ -205,6 +205,8 @@ def use_lxml_review_list(body, aid):
     for r in rs:
         print "=="
         products = r.xpath('../../../tr')
+        if len(products)== 0 or len(products[0])==0 or len(products[0][0])==0 or len(products[0][0][0])==0:
+            continue
         product = products[0][0][0][0]
         product_name = product.text
         if product_name != None:
@@ -235,18 +237,28 @@ def use_lxml_review_list(body, aid):
         #print tostring(first)
         review_stars = first[0][0].get('alt').split('out')[0].strip()
         review_title = first[1].text
-        review_time = first.xpath('text()')[2].strip(', ')
-        comments = review.xpath('./td/div/div[last()]/a')[1].text.replace('Comment', '').strip()
-        if comments == '' or comments == None:
-            comments = 0
+        review_time = first.xpath('text()')
+        if len(review_time)>2:
+            review_time = review_time[2].strip(', ')
         else:
-            comments = comments.strip('( ) ')
-        premalink = review.xpath('./td/div/div[last()]/a')[2]
-        permalink = review.xpath('./td/div/div[last()]/a')[2].text.replace('Permalink', '').strip()
-        if permalink == '' or permalink == None:
+            print len(review_time), review_time, tostring(first)
+            review_time = ''
+        comments = review.xpath('./td/div/div[last()]/a')
+        if len(comments) < 2:
+            comments = 0
             permalink = 0
         else:
-            permalink = permalink.strip('( ) ')
+            comments = review.xpath('./td/div/div[last()]/a')[1].text.replace('Comment', '').strip()
+            if comments == '' or comments == None:
+                comments = 0
+            else:
+                comments = comments.strip('( ) ')
+            #premalink = review.xpath('./td/div/div[last()]/a')[2]
+            permalink = review.xpath('./td/div/div[last()]/a')[2].text.replace('Permalink', '').strip()
+            if permalink == '' or permalink == None:
+                permalink = 0
+            else:
+                permalink = permalink.strip('( ) ')
         # review text
         review_content = review.xpath('./td/div/text()')
         review_content = ''.join(review_content)
@@ -678,7 +690,8 @@ def table_clean():
 read_main()
 #read_review()
 
-#### need to check the db table, some column are not used in reviewer
+#### soe review may missing time and comment info, so need to recap in the end when finish downloading. 
+
 
 #print body_resp
 conn.close()
