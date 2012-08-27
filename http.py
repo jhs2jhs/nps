@@ -233,15 +233,25 @@ def use_lxml_review_list(body, aid):
             review_help_x = 0
             review_help_y = 0
         # review meta
-        first = review.xpath('./td/div/div/span/img[contains(@src, "customer-reviews/stars-")]/../..')[0]
+        first = review.xpath('./td/div/div/span/img[contains(@src, "customer-reviews/stars-")]/../..')
+        if len(first) > 0:
+            first = first[0]
+            if len(first)>1:
         #print tostring(first)
-        review_stars = first[0][0].get('alt').split('out')[0].strip()
-        review_title = first[1].text
-        review_time = first.xpath('text()')
-        if len(review_time)>2:
-            review_time = review_time[2].strip(', ')
+                review_stars = first[0][0].get('alt').split('out')[0].strip()
+                review_title = first[1].text
+            else:
+                review_stars = ''
+                review_title = ''
+            review_time = first.xpath('text()')
+            if len(review_time)>2:
+                review_time = review_time[2].strip(', ')
+            else:
+                print len(review_time), review_time, tostring(first)
+                review_time = ''
         else:
-            print len(review_time), review_time, tostring(first)
+            review_stars = ''
+            review_title = ''
             review_time = ''
         comments = review.xpath('./td/div/div[last()]/a')
         if len(comments) < 2:
